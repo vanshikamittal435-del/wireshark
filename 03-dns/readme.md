@@ -1,76 +1,59 @@
-# 04 - HTTP / HTTPS
+# 03 - DNS
 
 ## Goal
-Compare a cleartext HTTP request against an encrypted HTTPS/TLS session.
+Capture and inspect a DNS query/response, and test the UDP-to-TCP fallback behavior.
 
 ## Environment
 - Interface: `Wi-Fi` (connected via mobile hotspot)
 
-## Part A — HTTP (cleartext)
+## Steps performed
 
-### Step 1: Capture a plain HTTP request
-1. Started a capture on `Wi-Fi`.
-2. Visited `http://neverssl.com` in the browser, then stopped the capture.
-3. Filtered with `http.request or http.response`.
-4. Clicked the `GET /` request → **Follow → TCP Stream** — the full request and response, headers and body, were completely readable in plaintext.
+### Step 1: Force a fresh lookup
+1. Flushed the DNS cache: `ipconfig /flushdns`.
 
-**Screenshot — HTTP stream (plaintext):**
-![Full HTTP request/response in plaintext](screenshots/http-stream.png)
+### Step 2: Capture a DNS query
+2. Started a capture on `Wi-Fi`.
+3. Ran `nslookup github.com` in a terminal, then stopped the capture.
+4. Filtered with `dns` — showed the query/response pair.
 
-5. Saved as `04a-http.pcapng`.
+### Step 3: Inspect the query
+5. Clicked the query packet → expanded **Domain Name System (query) → Queries** → confirmed `github.com: type A, class IN`.
 
-## Part B — HTTPS (TLS)
+**Screenshot — DNS query:**
+![DNS query packet showing the Questions section](screenshots/dns-query.png)
 
-### Step 2: Capture an HTTPS session
-6. Started a fresh capture on `Wi-Fi`.
-7. Visited an HTTPS site, then stopped the capture.
-8. Filtered with `tls.handshake`.
+### Step 4: Inspect the response
+6. Clicked the response packet → expanded **Domain Name System (response) → Answers** → confirmed the resolved IP and TTL value.
 
-### Step 3: Client Hello — SNI visible
-9. Clicked the **Client Hello** packet → expanded to the `server_name` extension — the target domain is visible in cleartext even though the session is about to be encrypted.
+**Screenshot — DNS response:**
+![DNS response packet showing the Answers section and TTL](screenshots/dns-response.png)
 
-**Screenshot — Client Hello (SNI):**
-![Client Hello showing the server_name extension](screenshots/client-hello.png)
+### Step 5: Test the UDP-to-TCP fallback
+7. Started a new capture, ran `nslookup -type=TXT google.com`.
+8. Filtered `dns && tcp` — returned no results (response stayed within UDP's 512-byte limit, no fallback occurred).
+9. Confirmed the normal path with `dns && udp`.
 
-### Step 4: Server Hello — cipher suite
-10. Clicked the **Server Hello** packet → expanded to see the chosen cipher suite.
+**Screenshot — confirming DNS runs over UDP:**
+![dns && udp filter confirming standard DNS traffic uses UDP](screenshots/dns-udp.png)
 
-**Screenshot — Server Hello (cipher suite):**
-![Server Hello showing the chosen cipher suite](screenshots/server-hello.png)
-
-### Step 5: Certificate — readable in TLS 1.2
-11. Confirmed the site negotiated **TLS 1.2** via the `supported_versions` extension.
-12. Clicked the **Certificate** packet → drilled down through `Certificates → Certificate → signedCertificate` — the raw bytes looked like binary noise at first, but this is just DER encoding, not encryption. Expanding further exposed readable `subject`, `issuer`, and `validity` fields.
-
-**Screenshot — Certificate (subject/issuer readable):**
-![Certificate details showing readable subject and issuer](screenshots/certificate.png)
-
-### Step 6: Confirm the payload is encrypted
-13. Re-ran `http.request` on this same HTTPS capture — returned **zero results**, proving the payload is encrypted and invisible to Wireshark, unlike Part A.
-
-**Screenshot — empty http.request result:**
-![http.request filter returning no results on the HTTPS capture](screenshots/https-no-http.png)
-
-14. Saved as `04b-https.pcapng`.
+### Step 6: Save
+10. File → Save As → `03-dns.pcapng`.
 
 ## Filters used
 ```
-http.request or http.response
-tls.handshake
-http.request     (on the HTTPS capture — returns nothing)
+dns
+dns && tcp     (no results — confirms no fallback needed)
+dns && udp     (confirms normal DNS uses UDP)
 ```
 
 ## Finding
-TLS 1.2 exposes the certificate in cleartext (readable once you expand deep enough into the DER structure), unlike TLS 1.3 where the certificate exchange itself is encrypted. Either way, HTTP content becomes completely invisible to a network observer once TLS is in use — only the SNI domain and cipher suite remain visible.
+The TXT query's response fit within UDP's 512-byte limit, so no TCP fallback occurred. This confirms UDP is DNS's default transport, with TCP reserved for responses too large for a single UDP packet (or zone transfers).
 
 ## Files
-- `04a-http.pcapng`
-- `04b-https.pcapng`
-- `screenshots/http-stream.png`
-- `screenshots/client-hello.png`
-- `screenshots/server-hello.png`
-- `screenshots/certificate.png`
-- `screenshots/https-no-http.png`
+- `03-dns.pcapng`
+- `screenshots/dns-query.png`
+- `screenshots/dns-response.png`
+- `screenshots/dns-udp.png`
 
 ## Security / networking takeaway
-HTTP exposes everything — headers, cookies, form data — to anyone on the path. HTTPS hides the content but still leaks the domain being visited via SNI, which is why encrypted SNI (ECH) is an active area of development.
+DNS responses aren't authenticated by default — anyone on the path could spoof a response before the real one arrives (DNS spoofing/cache poisoning). This is why DNSSEC and encrypted DNS (DoH/DoT) exist.
